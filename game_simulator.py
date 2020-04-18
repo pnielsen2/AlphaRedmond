@@ -55,14 +55,16 @@ class GameSim():
         self.filled_intersections = self.black_intersections[:] + self.white_intersections[:]
         self.boardstate = [intersection_lists[:], self.board_history[:]]
 
+        self.groups = self.candidate_groups
         self.groups = [[[intersection for intersection in group] for group in color] for color in self.candidate_groups]
+
+    def update_input_history(self):
         input_board = torch.zeros(1,2,9,9)
         for intersection in self.black_intersections:
             input_board[0,0][intersection] = 1
         for intersection in self.white_intersections:
             input_board[0,1][intersection] = 1
         self.input_history = torch.cat((self.input_history, input_board))
-    pass
 
     def step(self, next_move):
         self.candidate_move = next_move
@@ -82,6 +84,7 @@ class GameSim():
                 if not ko_check_intersections in self.board_history:
                     # all clear. Updates board history and intersections to the new state
                     self.update_gamesim(ko_check_intersections, double_clear)
+                    self.update_input_history()
                     # changes to the opposing player's turn
                     self.switch_current_player()
                     return True
@@ -171,7 +174,8 @@ class GameSim():
         # the idea is that you don't need to re-calculate what the groups are
         # for the opponent's stones. They shouldn't have changed from the last
         # board state if they haven't played a move since they were last calculated.
-        groups = copy.deepcopy(self.groups[color])
+        groups = [[intersection for intersection in group] for group in self.groups[color]]
+        #groups = copy.deepcopy(self.groups[color])
         if color != self.current_player:
             clearedcolor = []
             candidate_groups = []

@@ -77,7 +77,7 @@ class NNAgent():
     def __init__(self, network):
         self.network = network
         self.c_puct = 1.5
-        #self.personal_gamesim = game_simulator.GameSim()
+        self.mcts_gamesim = game_simulator.GameSim(0,9)
 
     class Node():
         def __init__(self, reset_data, probs):
@@ -89,6 +89,7 @@ class NNAgent():
             self.mean_action_values = torch.zeros(82)
             self.u_values = self.c_puct * self.probs
             self.expanded_edges = {}
+
 
 
     def get_network_output(self, gamesim):
@@ -106,14 +107,13 @@ class NNAgent():
         #print("pondering")
         policy, value = self.get_network_output(gamesim)
         probs = torch.nn.functional.softmax(policy, 0)
-        mcts_gamesim = copy.deepcopy(gamesim)
-        root = self.Node(mcts_gamesim.record(), probs)
-        while torch.sum(root.visit_counts).item() < 2:
+        self.mcts_gamesim = copy.deepcopy(gamesim) # to remove later
+        root = self.Node(self.mcts_gamesim.record(), probs)
+        while torch.sum(root.visit_counts).item() < 10:
             current_node = root
-
             node_move_pairs = []
-            #print("root visit counts")
-            #print(root.visit_counts)
+            print("root visit counts")
+            print(root.visit_counts)
 
             while True:
                 # choose the edge with the highest soft upper bound
@@ -123,20 +123,20 @@ class NNAgent():
                     # leaf
                     # expand node
                     #mcts_gamesim.set(copy.deepcopy(current_node.reset_data))
-                    mcts_gamesim.set(current_node.reset_data)
+                    self.mcts_gamesim.set(current_node.reset_data)
                     #save = copy.deepcopy(current_node.reset_data)
-                    if mcts_gamesim.step(self.intersection_from_move_number(chosen_move)):
+                    if self.mcts_gamesim.step(self.intersection_from_move_number(chosen_move)):
                         #print(save[0])
                         #print(current_node.reset_data[0])
                         #print(save[0] == current_node.reset_data[0])
-                        policy, value = self.get_network_output(mcts_gamesim)
-                        if mcts_gamesim.game_over:
-                            reward = mcts_gamesim.winner * (mcts_gamesim.current_player * 2 - 1)
+                        policy, value = self.get_network_output(self.mcts_gamesim)
+                        if self.mcts_gamesim.game_over:
+                            reward = self.mcts_gamesim.winner * (self.mcts_gamesim.current_player * 2 - 1)
                         else:
                             reward = value[0]
 
                         probs = torch.nn.functional.softmax(policy, 0)
-                        current_node.expanded_edges[chosen_move] = self.Node(mcts_gamesim.record(), probs)
+                        current_node.expanded_edges[chosen_move] = self.Node(self.mcts_gamesim.record(), probs)
                         # update statistics on higher nodes
                         node_move_pairs.append((current_node, chosen_move))
                         for (node, move) in node_move_pairs:
@@ -152,7 +152,7 @@ class NNAgent():
                     node_move_pairs.append((current_node, chosen_move))
                     current_node = current_node.expanded_edges[chosen_move]
 
-            mcts_gamesim.set(root.reset_data)
+            self.mcts_gamesim.set(root.reset_data)
 
 
         self.visit_counts = root.visit_counts
