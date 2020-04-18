@@ -13,7 +13,7 @@ class GameSim():
         self.candidate_groups = [[],[]]
         self.dimension = dimension
         self.board_history = [(set([]),set([]))]
-        self.input_history = torch.zeros(8,2,9,9)
+        self.input_history = torch.zeros(2,8,9,9)
         self.boardstate = [[[], []], [(set([]),set([]))]]
         self.just_passed = False
         self.next_move = []
@@ -59,12 +59,12 @@ class GameSim():
         self.groups = [[[intersection for intersection in group] for group in color] for color in self.candidate_groups]
 
     def update_input_history(self):
-        input_board = torch.zeros(1,2,9,9)
+        input_board = torch.zeros(2,1,9,9)
         for intersection in self.black_intersections:
             input_board[0,0][intersection] = 1
         for intersection in self.white_intersections:
-            input_board[0,1][intersection] = 1
-        self.input_history = torch.cat((self.input_history, input_board))
+            input_board[1,0][intersection] = 1
+        self.input_history = torch.cat((self.input_history, input_board),1)
 
     def step(self, next_move):
         self.candidate_move = next_move

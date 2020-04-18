@@ -93,10 +93,10 @@ class NNAgent():
 
 
     def get_network_output(self, gamesim):
-        player_indicator = torch.zeros(1,2,9,9)
-        player_indicator[0, gamesim.current_player] += 1
-        input = gamesim.input_history[-8:]
-        input = torch.cat((player_indicator, input)).view(1,18,9,9)
+        player_indicator = torch.zeros(2,9,9)
+        player_indicator[gamesim.current_player] += 1
+        input = torch.cat((gamesim.input_history[gamesim.current_player, -8:], gamesim.input_history[1 - gamesim.current_player, -8:]))
+        input = torch.cat((input, player_indicator)).view(1,18,9,9)
         policy, value = self.network(input)
         mask = torch.cat(((gamesim.input_history[-1][0] + gamesim.input_history[-1][1]).view(-1),torch.tensor([0.]))).type(torch.uint8)
         policy[mask] = float('-inf')
