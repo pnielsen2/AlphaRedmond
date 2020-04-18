@@ -11,7 +11,7 @@ import time
 import math
 import copy
 
-
+#test
 
 class GameWindow():
     def __init__(self, windowwidth, windowheight, boardsize, dimension):
