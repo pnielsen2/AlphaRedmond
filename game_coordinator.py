@@ -6,6 +6,12 @@ class GameCoordinator():
 
     def run(self):
         while self.gamesim.game_over == False:
+            # find the appropriate agents
+            # while True:
+            #   moves = agents.get_move(boardstate)
+            #   if gamesim.step(moves):
+            #       break
+
             next_move = self.get_action(displayer, agents[self.gamesim.current_player])
 
             if self.next_move != None:
