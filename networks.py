@@ -74,6 +74,6 @@ class FastNetwork(nn.Module):
 
     def forward(self, x):
         policy = torch.randn(82)
-        value = torch.randn(1)
+        value = torch.tanh(torch.randn(1))
 
         return policy, value
