@@ -113,6 +113,8 @@ class NNAgent():
         #self.visit_count_list = torch.cat((self.visit_count_list, agent.visit_counts.view(1,-1)))
         return self.get_intersection()
 
+        #self.visit_count_list = torch.cat((self.visit_count_list, agent.visit_counts.view(1,-1)))
+        return self.get_intersection()
 
     def get_network_output(self, current_player, input_history):
         player_indicator = torch.zeros(1,2,9,9).to(self.device)
@@ -149,6 +151,8 @@ class NNAgent():
             depth = 0
             current_node = self.root
             node_move_pairs = set([])
+            #time.sleep(1)
+            #print("new rollout")
             while True:
                 # choose the edge with the highest soft upper bound
                 soft_upper_bound = current_node.mean_action_values + current_node.u_values
