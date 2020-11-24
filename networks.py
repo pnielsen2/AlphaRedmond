@@ -9,11 +9,11 @@ class Network(nn.Module):
         self.conv_block_conv = nn.Conv2d(18, 64, 3, padding = 1)
         self.conv_block_batch_norm = nn.BatchNorm2d(64)
 
-        self.resid_block_conv_1s = [nn.Conv2d(64, 64, 3, padding = 1) for i in range(self.blocks)]
-        self.resid_block_batch_norm_1s = [nn.BatchNorm2d(64) for i in range(self.blocks)]
+        self.resid_block_conv_1s = nn.ModuleList([nn.Conv2d(64, 64, 3, padding = 1) for i in range(self.blocks)])
+        self.resid_block_batch_norm_1s = nn.ModuleList([nn.BatchNorm2d(64) for i in range(self.blocks)])
 
-        self.resid_block_conv_2s = [nn.Conv2d(64, 64, 3, padding = 1) for i in range(self.blocks)]
-        self.resid_block_batch_norm_2s = [nn.BatchNorm2d(64) for i in range(self.blocks)]
+        self.resid_block_conv_2s = nn.ModuleList([nn.Conv2d(64, 64, 3, padding = 1) for i in range(self.blocks)])
+        self.resid_block_batch_norm_2s = nn.ModuleList([nn.BatchNorm2d(64) for i in range(self.blocks)])
 
         self.policy_conv = nn.Conv2d(64, 2, 1)
         self.policy_batch_norm = nn.BatchNorm2d(2)
@@ -23,6 +23,12 @@ class Network(nn.Module):
         self.value_batch_norm = nn.BatchNorm2d(1)
         self.value_fc1 = nn.Linear(81, 64)
         self.value_fc2 = nn.Linear(64, 1)
+
+        torch.nn.init.constant_(self.policy_fc.weight,0)
+        self.policy_fc.bias.data.fill_(0)
+
+        torch.nn.init.constant_(self.value_fc2.weight,0)
+        self.value_fc2.bias.data.fill_(0)
 
 
 
@@ -36,10 +42,13 @@ class Network(nn.Module):
     def forward(self, x):
         convolutional_block = F.relu(self.conv_block_batch_norm(self.conv_block_conv(x)))
         residual_tower = self.resid_tower(convolutional_block)
-        policy = self.policy_fc(F.relu(self.policy_batch_norm(self.policy_conv(residual_tower))).view(-1))
-        value = torch.tanh(self.value_fc2(F.relu(self.value_fc1(F.relu(self.value_batch_norm(self.value_conv(residual_tower)).view(-1))))))
+
+        policy = self.policy_fc(F.relu(self.policy_batch_norm(self.policy_conv(residual_tower))).view(-1,162))
+        value = torch.tanh(self.value_fc2(F.relu(self.value_fc1(F.relu(self.value_batch_norm(self.value_conv(residual_tower)).view(-1,81))))))
 
         return policy, value
+
+
 
 class FastNetwork(nn.Module):
     def __init__(self):
@@ -74,6 +83,6 @@ class FastNetwork(nn.Module):
 
     def forward(self, x):
         policy = torch.randn(82)
-        value = torch.randn(1)
+        value = torch.tanh(torch.randn(1))
 
         return policy, value

@@ -38,7 +38,7 @@ class GameWindow():
         else:
             return False
 
-    def redrawgamewindow(self, toplay, black_intersections, white_intersections):
+    def redrawgamewindow(self, toplay, boardstate):
 
         # draw background
         self.win.fill((165,174,144))
@@ -83,9 +83,9 @@ class GameWindow():
             )
 
         # sets color of ghost stone based on whose turn it is
-        if toplay == 0:
+        if toplay == "black":
             ghoststone_color = (0,0,0,127)
-        elif toplay == 1:
+        elif toplay == "white":
             ghoststone_color = (255,255,255,127)
 
         self.snap([self.mousex, self.mousey])
@@ -104,8 +104,8 @@ class GameWindow():
             drawstone(self.snap([self.mousex,self.mousey]), ghoststone_color)
 
         # draws stones on board
-        for intersection in black_intersections:
+        for intersection in boardstate[0]:
             drawstone(self.get_location(intersection), (0,0,0))
-        for intersection in white_intersections:
+        for intersection in boardstate[1]:
             drawstone(self.get_location(intersection), (255,255,255))
         pygame.display.update()

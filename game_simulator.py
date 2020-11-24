@@ -2,44 +2,81 @@ import torch
 import pygame
 from pygame.locals import *
 import copy
+import collections
+import time
+
+
 
 class GameSim():
-    def __init__(self, first_player, dimension):
-        self.current_player = first_player
+    def __init__(self, first_player, dimension, displayer, device):
+        self.device = device
+        self.current_player = "black"
         self.moves_played = 0
-        self.black_intersections = []
-        self.white_intersections = []
-        self.filled_intersections = []
-        self.groups = [[],[]]
-        self.candidate_groups = [[],[]]
+        self.filled_intersections = set([])
+        self.groups = {"black": set([]), "white": set([])}
         self.dimension = dimension
-        self.board_history = [(set([]),set([]))]
-        self.input_history = torch.zeros(8,2,9,9)
-        self.boardstate = [[[], []], [(set([]),set([]))]]
+        self.board_history = set([])
+        self.input_history = torch.zeros(8,2,9,9).to(self.device)
+        Board = collections.namedtuple('Board', ["black", "white"])
+        #self.boardstate = Board(set([]), set([]))
+        self.boardstate = (set([]), set([]))
         self.just_passed = False
         self.next_move = []
         self.running = True
-        self.visit_count_list = torch.tensor([])
+        self.visit_count_list = torch.tensor([]).to(self.device)
         self.winner = None
         self.captured_stones = []
+        self.most_recent_move = None
+        self.displayer = displayer
+
+    class Group():
+        def __init__(self, stones, liberties):
+            self.stones = stones
+            self.liberties = liberties
+
+        def add_stone(self, next_move, next_move_liberties):
+            self.stones.add(next_move)
+            self.liberties.remove(next_move)
+            self.liberties = self.liberties.union(next_move_liberties)
+
+    def state_copy(self, state):
+        current_player = state[0]
+        groups = {"black": set([]), "white": set([])}
+        for player in ["black","white"]:
+            for group in state[1][player]:
+                copy_group = self.Group({stone for stone in group.stones}, {liberty for liberty in group.liberties})
+                groups[player].add(copy_group)
+        board_history = {(frozenset({stone for stone in boardstate[0]}),frozenset({stone for stone in boardstate[1]})) for boardstate in state[2]}
+        input_history = state[3].clone()
+        just_passed = state[4]
+        winner = state[5]
+        moves_played = state[6]
+        boardstate = ({stone for stone in state[7][0]},{stone for stone in state[7][1]})
+        return (current_player, groups, board_history, input_history, just_passed, winner, moves_played, boardstate)
+
+
 
     def set(self, reset_data):
-        self.current_player = reset_data[0]
-        self.black_intersections = reset_data[1]
-        self.white_intersections = reset_data[2]
-        self.groups = reset_data[3]
-        self.board_history = reset_data[4]
-        self.input_history = reset_data[5]
-        self.just_passed = reset_data[6]
-        self.winner = reset_data[7]
-        self.moves_played = reset_data[8]
-        self.filled_intersections = reset_data[9]
+        reset_data = self.state_copy(reset_data)
+        self.current_player = reset_data[0] # done
+        self.groups = reset_data[1]
+        self.board_history = reset_data[2]
+        self.input_history = reset_data[3]
+        self.just_passed = reset_data[4] # done
+        self.winner = reset_data[5] # done
+        self.moves_played = reset_data[6] # done
+        self.boardstate = reset_data[7]
+        #print("mcts gamesim set")
 
     def record(self):
-        return [self.current_player, self.black_intersections, self.white_intersections, self.groups, self.board_history, self.input_history, self.just_passed, self.winner, self.moves_played, self.filled_intersections]
+        #return (copy.deepcopy(self.current_player), copy.deepcopy(self.groups), copy.deepcopy(self.board_history), self.input_history.clone(), copy.deepcopy(self.just_passed), copy.deepcopy(self.winner), copy.deepcopy(self.moves_played), copy.deepcopy(self.boardstate))
+        return self.state_copy((self.current_player, self.groups, self.board_history, self.input_history, self.just_passed, self.winner, self.moves_played, self.boardstate))
 
     def switch_current_player(self):
-        self.current_player = 1 - self.current_player
+        if self.current_player == "black":
+            self.current_player = "white"
+        elif self.current_player == "white":
+            self.current_player = "black"
 
     def on_board(self,intersection):
         if -1<intersection[0]<self.dimension and -1<intersection[1]<self.dimension:
@@ -53,118 +90,179 @@ class GameSim():
         else:
             return True
 
-    def update_gamesim(self, board_hash, intersection_lists):
-        intersections = (intersection_lists[0] + intersection_lists[1])[:]
-        if len(intersections) != len(set(intersections)):
-            intersections.sort()
-            print("inside step 10")
-            print(intersections)
-        self.just_passed = False
-        self.board_history.append(board_hash)
-
-        [self.black_intersections, self.white_intersections] = intersection_lists[:]
-
-        self.filled_intersections = self.black_intersections[:] + self.white_intersections[:]
-        self.boardstate = [intersection_lists[:], self.board_history[:]]
-
-        self.groups = self.candidate_groups
-        self.groups = [[[intersection for intersection in group] for group in color] for color in self.candidate_groups]
-        self.moves_played += 1
-        if self.moves_played == 162:
-            self.score()
-
-
-    def update_input_history(self):
+    def update_input_history(self, next_move, removed_stones):
         #input_board = torch.zeros(1,2,9,9)
 
         input_board = torch.flip(self.input_history[-1:],[1])
-        #print(input_board[0,0])
-        if self.candidate_move[0] != 9:
-            input_board[0,0][self.candidate_move] = 1
-            for stone in self.captured_stones:
+        if next_move[0] != 9:
+            input_board[0,1][next_move] = 1
+            for stone in removed_stones:
                 input_board[0,0][stone] = 0
 
         self.input_history = torch.cat((self.input_history, input_board))
 
+    def connect_groups(self, adjacent_groups, next_move, next_move_liberties):
+        stones = set([])
+        liberties = set([])
+        stones.add(next_move)
+        liberties = liberties.union(next_move_liberties)
+        if len(adjacent_groups) > 0:
+            for group in adjacent_groups:
+                stones = stones.union(group.stones)
+                liberties = liberties.union(group.liberties)
+            liberties.remove(next_move)
+        return self.Group(stones, liberties)
+
+    def opposite_player(self, player):
+        if player == "black":
+            return "white"
+        else:
+            return "black"
+
+    def player_id(self, player):
+        if player == "black":
+            return 0
+        else:
+            return 1
+
+
     def step(self, next_move):
+        filled_intersections = self.boardstate[0].union(self.boardstate[1])
+        #print("filled_intersections")
+        #print(filled_intersections)
 
-        self.candidate_move = next_move
-        if set(self.filled_intersections) != set(self.black_intersections + self.white_intersections):
-            print(self.filled_intersections)
-            print(self.black_intersections + self.white_intersections)
-        if next_move not in self.filled_intersections and self.on_board(next_move):
-            filled_intersections = [self.black_intersections[:], self.white_intersections[:]]
-            filled_intersections[self.current_player].append(next_move)
-            intersections = (filled_intersections[0] + filled_intersections[1])[:]
-            candidate_intersections = self.clear(filled_intersections, 1 - self.current_player)
-            # removes any of the current player's stones with no liberties
-            double_clear = self.clear(candidate_intersections, self.current_player)
-            # if any of the currnt player's stones had no liberties and were
-            # removed after clearing the opponents' stones, it must have been a
-            # suicide, so we don't continue
-            if set(double_clear[self.current_player]) == set(candidate_intersections[self.current_player]):
-                # creates the current board position
-                ko_check_intersections = (set(candidate_intersections[0][:]), set(candidate_intersections[1][:]))
-                # checks if the current board is in the board history
-                if not ko_check_intersections in self.board_history:
-                    # all clear. Updates board history and intersections to the new state
-                    intersections = (double_clear[0] + double_clear[1])[:]
-                    if len(intersections) != len(set(intersections)):
-                        intersections.sort()
-                        print("inside step 11")
-                        print(intersections)
+        removed_stones = []
+        if next_move not in filled_intersections and self.on_board(next_move):
+            # place move on board
+            next_move_liberties = set([])
+            for point in [(1,0),(0,1),(-1,0),(0,-1)]:
+                adjacent_space = (next_move[0] + point[0], next_move[1] + point[1])
+                if adjacent_space not in filled_intersections and self.on_board(adjacent_space):
+                    next_move_liberties.add(adjacent_space)
+            #print("current player")
+            #print(self.current_player)
+            self.boardstate[self.player_id(self.current_player)].add(next_move)
+            #print("boardstate")
+            #print(self.boardstate)
+            # connect move to adjacent groups
+            adjacent_groups = []
+            for group in self.groups[self.current_player]:
+                if next_move in group.liberties:
+                    adjacent_groups.append(group)
+            new_group = self.connect_groups(adjacent_groups, next_move, next_move_liberties)
+            for group in adjacent_groups:
+                self.groups[self.current_player].remove(group)
+            self.groups[self.current_player].add(new_group)
 
-                    self.update_gamesim(ko_check_intersections, double_clear)
-                    # changes to the opposing player's turn
 
+            capture = False
+            adjacent_opponent_groups = set([])
+            captured_opponent_groups = set([])
+            extra_liberties_due_to_capture = set([])
+            for group in self.groups[self.opposite_player(self.current_player)]:
+                if next_move in group.liberties:
+                    group.liberties.remove(next_move)
+                    adjacent_opponent_groups.add(group)
+                if len(group.liberties) == 0:
+                    capture = True
+                    captured_opponent_groups.add(group)
+                    #self.groups[self.opposite_player(self.current_player)].remove(group)
+                    for stone in group.stones:
+                        removed_stones.append(stone)
+                        self.boardstate[self.player_id(self.opposite_player(self.current_player))].remove(stone)
+                        #self.filled_intersections.remove(stone)
+                        for group in self.groups[self.current_player]:
+                            if any([self.adjacent(stone,current_player_stone) for current_player_stone in group.stones]):
+                                group.liberties.add(stone)
+                                extra_liberties_due_to_capture.add((group, stone))
+
+            for group in captured_opponent_groups:
+                self.groups[self.opposite_player(self.current_player)].remove(group)
+
+            suicide = False
+            if capture == False:
+                if any([len(group.liberties) == 0 for group in self.groups[self.current_player]]):
+                    suicide = True
+                    # suicide, revert board state.
+                    for group in adjacent_groups:
+                        self.groups[self.current_player].add(group)
+                    self.groups[self.current_player].remove(new_group)
+                    for group in adjacent_opponent_groups:
+                        group.liberties.add(next_move)
+                    self.boardstate[self.player_id(self.current_player)].remove(next_move)
+
+            if suicide == False:
+                if (frozenset(self.boardstate[0]), frozenset(self.boardstate[1])) in self.board_history:
+                    ko = True
+                    # ko, revert board state.
+                    for group in adjacent_groups:
+                        self.groups[current_player].add(group)
+                    self.groups[current_player].remove(group)
+                    for group in captured_opponent_groups:
+                        self.groups[self.opposite_player(self.current_player)].add(group)
+                    for group in adjacent_opponent_groups:
+                        group.liberties.add(next_move)
+                    for group, liberty in extra_liberties_due_to_capture:
+                        group.liberties.remove(liberty)
+                    self.boardstate[self.player_id(self.current_player)].remove(next_move)
+                    for stone in removed_stones:
+                        self.boardstate[self.player_id(self.opposite_player(self.current_player))].remove(stone)
+                else:
+                    ko = False
+
+                if not (suicide or ko):
+                    self.just_passed = False
+                    self.board_history.add((frozenset(self.boardstate[0]), frozenset(self.boardstate[0])))
+
+                    self.update_input_history(next_move, removed_stones)
                     self.switch_current_player()
-
-                    self.update_input_history()
-
-
                     return True
+                else:
+                    return False
 
         elif next_move == (self.dimension, 0):
             if self.just_passed:
-
+                #print("2nd pass")
                 self.score()
             else:
+                #print("pass")
                 self.just_passed = True
-                self.switch_current_player()
+            self.update_input_history(next_move, removed_stones)
+            self.switch_current_player()
 
-            self.update_input_history()
+
 
             return True
         else:
+            #print("hi")
+            #print(next_move)
+            #print(next_move in filled_intersections)
+            #print(self.on_board(next_move))
             return False
 
-
-
     def score(self):
-        black_score = len(self.black_intersections)
-        white_score = len(self.white_intersections) + 7.5
+        black_score = len(self.boardstate[0])
+        white_score = len(self.boardstate[1]) + 7.5
         territory = [(x,y) for x in range(self.dimension) for y in range(self.dimension)]
-        intersections = self.black_intersections + self.white_intersections
-        intersections.sort()
+        intersections = self.boardstate[0].union(self.boardstate[1])
+        #intersections.sort()
         #print(intersections)
-        for intersection in self.black_intersections:
-            #print(intersection)
-            territory.remove(intersection)
-            #print(territory)
-        for intersection in self.white_intersections:
-            #print(intersection)
+        for intersection in intersections:
             territory.remove(intersection)
         territory = [[element] for element in territory]
         empty_regions = self.group(territory)
         for empty_region in empty_regions:
             reaches = self.liberties(empty_region, territory)
-            if all([bounding_stone in self.black_intersections for bounding_stone in reaches]):
+            if all([bounding_stone in self.boardstate[0] for bounding_stone in reaches]):
                 black_score += len(empty_region)
-            if all([bounding_stone in self.white_intersections for bounding_stone in reaches]):
+            if all([bounding_stone in self.boardstate[1] for bounding_stone in reaches]):
                 white_score += len(empty_region)
         self.black_score = black_score
         self.white_score = white_score
-        self.winner = (black_score > white_score)* 2 - 1
+        if black_score > white_score:
+            self.winner = "black"
+        else:
+            self.winner = "white"
 
     # Takes a list of candidate groups and combines candidates that are part of
     # the same group.
@@ -189,10 +287,10 @@ class GameSim():
 
 
     def adjacent(self, intersection1, intersection2):
-        if intersection2 in [(intersection1[0] - 1, intersection1[1]),
+        if intersection2 in set([(intersection1[0] - 1, intersection1[1]),
          (intersection1[0] + 1, intersection1[1]),
          (intersection1[0], intersection1[1] - 1),
-         (intersection1[0], intersection1[1] + 1)]:
+         (intersection1[0], intersection1[1] + 1)]):
             return True
         else:
             return False
@@ -272,46 +370,27 @@ class GameSim():
             #exception
 
 
-    def run(self, displayer, agents):
+    def run(self, agents):
         while self.winner == None:
             #print(self.black_intersections)
             #print(self.white_intersections)
             agent = agents[self.current_player]
-            self.next_move = self.get_action(displayer, agent)
-            self.visit_count_list = torch.cat((self.visit_count_list, agent.visit_counts.view(1,-1)))
-            intersections = (self.black_intersections + self.white_intersections)[:]
-            if len(intersections) != len(set(intersections)):
-                intersections.sort()
-                print("inside run")
-                print(intersections)
-            self.step(self.next_move)
-            intersections = (self.black_intersections + self.white_intersections)[:]
-            if len(intersections) != len(set(intersections)):
-                intersections.sort()
-                print("after step")
-                print(intersections)
+            self.next_move = agent.get_action()
+            self.visit_count_list = torch.cat((self.visit_count_list, agent.root.visit_counts.view(1,-1)))
 
-            if len(self.black_intersections) != len(set(self.black_intersections)):
-                old_black_intersections.sort()
-                print("old black")
-                print(old_black_intersections)
-                print("new black")
-                print(self.black_intersections)
-            if len(self.white_intersections) != len(set(self.white_intersections)):
-                old_white_intersections.sort()
-                print("old white")
-                print(old_white_intersections)
-                print("new white")
-                print(new_white_intersections)
+            #step and inform all agents of the result
+            if self.step(self.next_move):
+                agents["black"].update_root_node(self.next_move, self)
+                agents["white"].update_root_node(self.next_move, self)
 
             if self.next_move != None:
-                if displayer != None:
-                    displayer.redrawgamewindow(self.current_player, self.black_intersections, self.white_intersections)
+                if self.displayer != None:
+                    self.displayer.redrawgamewindow(self.current_player, self.boardstate[0], self.boardstate[1])
 
                     for event in pygame.event.get():
                         if event.type == QUIT:
-                            displayer.running = False
-                    if displayer.running == False:
+                            self.displayer.running = False
+                    if self.displayer.running == False:
                         break
             else:
                 break
@@ -319,11 +398,14 @@ class GameSim():
         print(self.white_score)
         print(self.winner)
 
-    def get_action(self, displayer, agent):
-        agent.ponder(self, displayer)
+    def get_action(self, agent):
+        if self.most_recent_move != None:
+            agent.update_root_node(self.most_recent_move)
+        agent.ponder()
 
         #self.visit_count_list = torch.cat((self.visit_count_list, agent.visit_counts.view(1,-1)))
-        return agent.get_intersection(self, displayer)
+        self.most_recent_move = agent.get_intersection()
+        return self.most_recent_move
         '''
         while True:
             intersection = agent.get_intersection(self, displayer)

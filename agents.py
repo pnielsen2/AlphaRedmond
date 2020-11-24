@@ -3,6 +3,7 @@ from pygame.locals import *
 import torch
 import copy
 import game_simulator
+import time
 
 
 class HumanAgent():
@@ -14,8 +15,8 @@ class HumanAgent():
 
     def ponder(self, gamesim, displayer):
         self.color = gamesim.current_player
-        self.black_intersections = gamesim.black_intersections
-        self.white_intersections = gamesim.white_intersections
+        self.black_intersections = gamesim.boardstate[0]
+        self.white_intersections = gamesim.boardstate[1]
 
 
     def get_intersection(self, gamesim, displayer, illegal_moves):
@@ -73,132 +74,157 @@ class SoftmaxAgent():
 
 
 class NNAgent():
-    def __init__(self, network, rollouts):
+    def __init__(self, network, rollouts, gamesim, device):
+        self.device = device
         self.network = network
         self.c_puct = 1.5
-        self.mcts_gamesim = game_simulator.GameSim(0,9)
+        #self.mcts_gamesim = game_simulator.GameSim(0,9)
         self.dirichlet_noise = torch.distributions.dirichlet.Dirichlet(torch.zeros(82)+.13)
         self.rollouts = rollouts
+        self.gamesim = gamesim
+        policy, value = self.get_network_output(gamesim.current_player, gamesim.input_history)
+        probs = torch.nn.functional.softmax(policy, 0)
+        self.mcts_gamesim = game_simulator.GameSim(1, gamesim.dimension, gamesim.displayer, self.device) # to remove later
+        self.root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample().to(self.device), self.device)
+        #self.root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample())
+
+        self.prob_dist = torch.distributions.Categorical(probs)
 
     class Node():
-        def __init__(self, reset_data, probs):
+        def __init__(self, reset_data, probs, device):
+            self.device = device
             self.c_puct = 1.5
             self.reset_data = reset_data
             self.probs = probs
-            self.visit_counts = torch.zeros(82)
-            self.total_action_values = torch.zeros(82)
-            self.mean_action_values = torch.zeros(82)
+            self.visit_counts = torch.zeros(82).to(self.device)
+            self.total_action_values = torch.zeros(82).to(self.device)
+            self.mean_action_values = torch.zeros(82).to(self.device)
             self.u_values = self.c_puct * self.probs
             self.expanded_edges = {}
 
+            self.moves_played = self.reset_data[6]
+
+    def get_action(self):
+        self.ponder()
+        #print(self.gamesim.current_player)
+        #print(self.get_intersection())
+        #print(self.root.mean_action_values)
+
+        #self.visit_count_list = torch.cat((self.visit_count_list, agent.visit_counts.view(1,-1)))
+        return self.get_intersection()
 
 
-    def get_network_output(self, gamesim):
-        player_indicator = torch.zeros(1,2,9,9)
-        player_indicator[0, gamesim.current_player] += 1
-        input = gamesim.input_history[-8:]
+    def get_network_output(self, current_player, input_history):
+        player_indicator = torch.zeros(1,2,9,9).to(self.device)
+        if current_player == "black":
+            player_indicator[0,0] += 1
+        else:
+            player_indicator[0,1] += 1
+        input = input_history[-8:]
         input = torch.cat((player_indicator, input)).view(1,18,9,9)
-        policy, value = self.network(input)
-        mask = torch.cat(((gamesim.input_history[-1][0] + gamesim.input_history[-1][1]).view(-1),torch.tensor([0.]))).type(torch.bool)
+        self.network.to(self.device)
+        policy, value = self.network(input.to(self.device))
+        mask = torch.cat(((input_history[-1][0] + input_history[-1][1]).view(-1),torch.tensor([0.]).to(self.device))).type(torch.bool)
+        #print(torch.sum(gamesim.input_history[-1][0]) + torch.sum(gamesim.input_history[-1][1]))
+        #print("hi 1")
+        policy = policy.view(82)
         policy[mask] = float('-inf')
         return policy, value
 
+    def update_root_node(self, move, gamesim):
+        if move in self.root.expanded_edges:
+            self.root = self.root.expanded_edges[move]
+        else:
+            reward, probs = self.get_value_and_probs(gamesim.current_player, gamesim.input_history, gamesim.winner)
+            self.root.expanded_edges[move] = self.Node(gamesim.record(), probs, self.device)
+            self.root.expanded_edges[move].winner = gamesim.winner
+            self.root = self.root.expanded_edges[move]
 
-    def ponder(self, gamesim, displayer):
+    def ponder(self):
+        #print(self.gamesim.current_player)
+        #print(torch.sum(self.root.visit_counts).item())
         #print("pondering")
-        policy, value = self.get_network_output(gamesim)
-        probs = torch.nn.functional.softmax(policy, 0)
-        self.mcts_gamesim = copy.deepcopy(gamesim) # to remove later
-        root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample())
-        while torch.sum(root.visit_counts).item() < self.rollouts:
-            current_node = root
+
+        while torch.sum(self.root.visit_counts).item() < self.rollouts:
+            depth = 0
+            current_node = self.root
             node_move_pairs = set([])
             while True:
                 # choose the edge with the highest soft upper bound
                 soft_upper_bound = current_node.mean_action_values + current_node.u_values
-                chosen_move = torch.max(soft_upper_bound, 0)[1].item()
+
+                max_soft_upper_bound = soft_upper_bound.max().item()
+                max_soft_upper_bound_indices = (soft_upper_bound == max_soft_upper_bound).nonzero().view(-1)
+                chosen_move = max_soft_upper_bound_indices[torch.randint(len(max_soft_upper_bound_indices),(1,))].item()
+
+                #chosen_move = torch.max(soft_upper_bound, 0)[1].item()
                 if chosen_move not in current_node.expanded_edges:
                     # leaf
                     # expand node
-                    #mcts_gamesim.set(copy.deepcopy(current_node.reset_data))
-                    intersections = (current_node.reset_data[1] + current_node.reset_data[2])[:]
-                    if len(intersections) != len(set(intersections)):
-                        intersections.sort()
-                        print("inside ponder (mcts, reset_data 1)")
-                        print(intersections)
                     self.mcts_gamesim.set(current_node.reset_data)
-                    #save = copy.deepcopy(current_node.reset_data)
-                    intersections = (self.mcts_gamesim.black_intersections + self.mcts_gamesim.white_intersections)[:]
-                    if len(intersections) != len(set(intersections)):
-                        intersections.sort()
-                        print("inside ponder (mcts, after reset)")
-                        print(intersections)
-                    intersections = (gamesim.black_intersections + gamesim.white_intersections)[:]
-                    if len(intersections) != len(set(intersections)):
-                        intersections.sort()
-                        print("inside ponder (gamesim)")
-                        print(intersections)
                     if self.mcts_gamesim.step(self.intersection_from_move_number(chosen_move)):
-                        #print(save[0])
-                        #print(current_node.reset_data[0])
-                        #print(save[0] == current_node.reset_data[0])
-                        intersections = (self.mcts_gamesim.black_intersections + self.mcts_gamesim.white_intersections)[:]
-                        if len(intersections) != len(set(intersections)):
-                            intersections.sort()
-                            print("inside ponder (mcts, reset_data 4)")
-                            print(intersections)
-                        self.update_search_tree(current_node, chosen_move, node_move_pairs, self.mcts_gamesim.winner)
+                        self.update_search_tree(current_node, chosen_move, node_move_pairs, self.mcts_gamesim.current_player, self.mcts_gamesim.input_history, self.mcts_gamesim.winner)
                         break
                     else:
-                        intersections = (self.mcts_gamesim.black_intersections + self.mcts_gamesim.white_intersections)[:]
-                        if len(intersections) != len(set(intersections)):
-                            intersections.sort()
-                            print("inside ponder (mcts, illegal move)")
-                            print(intersections)
-                        current_node.mean_action_values[chosen_move] = float(-100000)
-                        current_node.total_action_values[chosen_move] = float(-100000)
+                        current_node.mean_action_values[chosen_move] = float('-inf')
+                        current_node.total_action_values[chosen_move] = float('-inf')
                 else:
                     node_move_pairs.add((current_node, chosen_move))
                     #check if terminal state
-                    if current_node.expanded_edges[chosen_move].reset_data[7] != None:
-                        reward = current_node.expanded_edges[chosen_move].reset_data[7]
+                    if current_node.expanded_edges[chosen_move].reset_data[5] != None:
+                        reward = (1 - 2 * self.gamesim.player_id(current_node.expanded_edges[chosen_move].reset_data[5])) * (1 - 2 * self.gamesim.player_id(current_node.reset_data[0]))
                         node_move_pairs.add((current_node, chosen_move))
-                        self.backup(node_move_pairs, reward)
+                        self.backup(node_move_pairs, reward, self.mcts_gamesim.current_player)
                         break
                     else:
                         # go to that node
+                        depth +=1
                         current_node = current_node.expanded_edges[chosen_move]
                 #displayer.redrawgamewindow(current_node.reset_data[0], current_node.reset_data[1], current_node.reset_data[2])
-            self.mcts_gamesim.set(root.reset_data)
+            self.mcts_gamesim.set(self.root.reset_data)
         #print("root visit counts")
-        #print(root.visit_counts)
-        self.visit_counts = root.visit_counts
-        self.prob_dist = torch.distributions.Categorical(probs)
+        #print(self.root.visit_counts)
+        #print("root mean action values")
+        #print(self.root.mean_action_values)
+        self.visit_counts = self.root.visit_counts
 
-    def update_search_tree(self, current_node, chosen_move, node_move_pairs, winner = None):
+
+    def update_search_tree(self, current_node, chosen_move, node_move_pairs, current_player, input_history, winner = None):
         # get reward and probs
-        reward, probs = self.get_reward_and_probs(self.mcts_gamesim)
+        value, probs = self.get_value_and_probs(current_player, input_history, winner)
         # add node to search tree
-        current_node.expanded_edges[chosen_move] = self.Node(self.mcts_gamesim.record(), probs)
+        current_node.expanded_edges[chosen_move] = self.Node(self.mcts_gamesim.record(), probs, self.device)
         current_node.expanded_edges[chosen_move].winner = self.mcts_gamesim.winner
         # add current node and chosen move to rollout history
         node_move_pairs.add((current_node, chosen_move))
         # update statistics on higher nodes
-        self.backup(node_move_pairs, reward)
+        self.backup(node_move_pairs, value, current_player)
 
-    def get_reward_and_probs(self, gamesim):
-        policy, value = self.get_network_output(gamesim)
-        if gamesim.winner != None:
-            reward = gamesim.winner * (gamesim.current_player * 2 - 1)
+    def get_value_and_probs(self, current_player, input_history, winner):
+        policy, value = self.get_network_output(current_player, input_history)
+        if winner != None:
+            value = 1 if winner == current_player else -1
         else:
-            reward = value[0]
-        probs = torch.nn.functional.softmax(policy, 0)
-        return (reward, probs)
+            # value is from the perspective of the current player
+            value = value.item()
 
-    def backup(self, history, reward):
+        probs = torch.nn.functional.softmax(policy, 0)
+        return (value, probs)
+
+    def backup(self, history, value, current_player):
+        #print("new backup")
+        #print("backing up")
         for (node, move) in history:
+            #print(move)
             node.visit_counts[move] += 1
-            node.total_action_values[move] += reward * self.mcts_gamesim.current_player * node.reset_data[0]
+            #print(node.reset_data[0])
+            #print("reward")
+            #print(reward * (1 - 2 * self.gamesim.player_id(node.reset_data[0])) * (1 - 2 * self.gamesim.player_id(self.gamesim.opposite_player(current_player))))
+            # node reset data[0] is the current player in that node. This is
+            # positive if the node's current player is the same as the player
+            # who recieved the value.
+
+            node.total_action_values[move] += value * (1 - 2 * self.gamesim.player_id(node.reset_data[0])) * (1 - 2 * self.gamesim.player_id(current_player))
             node.mean_action_values[move] = node.total_action_values[move] / node.visit_counts[move]
             node.u_values = self.c_puct * node.probs * torch.sqrt(1 + torch.sum(node.visit_counts)) / (1 + node.visit_counts)
 
@@ -207,16 +233,18 @@ class NNAgent():
         y = (number % 9)
         return (x,y)
 
-    def get_intersection(self, gamesim, displayer, MCTS = True):
+    def get_intersection(self, MCTS = True):
         if MCTS:
-            if gamesim.moves_played < 8:
-                visit_dist = torch.distributions.Categorical(self.visit_counts)
+            if self.root.moves_played < 8:
+                visit_dist = torch.distributions.Categorical(self.root.visit_counts)
                 move_output = visit_dist.sample().item()
+
             else:
-                max_visit_count = self.visit_counts.max().item()
-                max_indices = (self.visit_counts == max_visit_count).nonzero().view(-1)
+                max_visit_count = self.root.visit_counts.max().item()
+                max_indices = (self.root.visit_counts == max_visit_count).nonzero().view(-1)
                 move_output = max_indices[torch.randint(len(max_indices),(1,))].item()
         else:
             move_output = self.prob_dist.sample().item()
-        #print(self.intersection_from_move_number(move_output))
+        #print(move_output)
+
         return self.intersection_from_move_number(move_output)
