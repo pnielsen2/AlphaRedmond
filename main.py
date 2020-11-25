@@ -20,54 +20,44 @@ import networks
 
 import multiprocessing as mp
 
-# display parameters
-display = False
-windowwidth = 1030
-windowheight = 830
-boardsize = 810
+import parameters
 
-# game parameters
-dimension = 9
-number_of_games = 1000
+
 
 # nontrivial initializations (will change in distant future
-displayer = None if display == False else game_displayer.GameWindow(windowwidth, windowheight, boardsize, dimension)
+displayer = None if parameters.display == False else game_displayer.GameWindow(parameters.windowwidth, parameters.windowheight, parameters.boardsize, parameters.dimension)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() and parameters.device =='gpu' else "cpu")
 
 def main():
 
-    network = networks.Network().cuda()
+    network = networks.Network().to(device)
     print(next(network.parameters()).is_cuda)
-    rollouts = 82
-    #362
+
     game_data = []
     value_data = []
     policy_data = []
 
-    # dtype = torch.cuda.FloatTensor # Uncomment this to run on GPU
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
     print(device)
 
-    replaybuffer = data_generator.ReplayBuffer(1024, device)
+    replaybuffer = data_generator.ReplayBuffer(parameters.replay_buffer_size, device)
 
-    generator = data_generator.DataGenerator(network, rollouts, replaybuffer, device)
+    generator = data_generator.DataGenerator(network, parameters.rollouts, replaybuffer, device, displayer)
 
 
 
     policy_loss = nn.KLDivLoss(reduction = 'batchmean')
     value_loss = nn.MSELoss()
-    optimizer = optim.Adam(network.parameters(), lr = .000001)
+    optimizer = optim.Adam(network.parameters(), lr = parameters.learning_rate)
 
     policy_activation = nn.LogSoftmax()
 
 
     while True:
-        generator.generate_games(1)
-        if len(replaybuffer.games) > 64:
-            for epoch in range(10):
-                input, policy_target, value_target = replaybuffer.sample(64)
+        generator.generate_games(parameters.games_generated_at_a_time)
+        if len(replaybuffer.games) >= parameters.batch_size:
+            for epoch in range(batches_per_train_loop):
+                input, policy_target, value_target = replaybuffer.sample(parameters.batch_size)
 
                 optimizer.zero_grad()
 

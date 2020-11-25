@@ -4,7 +4,7 @@ from pygame.locals import *
 import copy
 import collections
 import time
-
+import parameters
 
 
 class GameSim():
@@ -16,7 +16,7 @@ class GameSim():
         self.groups = {"black": set([]), "white": set([])}
         self.dimension = dimension
         self.board_history = set([])
-        self.input_history = torch.zeros(8,2,9,9).to(self.device)
+        self.input_history = torch.zeros(8,2,parameters.dimension, parameters.dimension).to(self.device)
         Board = collections.namedtuple('Board', ["black", "white"])
         #self.boardstate = Board(set([]), set([]))
         self.boardstate = (set([]), set([]))
@@ -91,10 +91,9 @@ class GameSim():
             return True
 
     def update_input_history(self, next_move, removed_stones):
-        #input_board = torch.zeros(1,2,9,9)
 
         input_board = torch.flip(self.input_history[-1:],[1])
-        if next_move[0] != 9:
+        if next_move[0] != parameters.dimension:
             input_board[0,1][next_move] = 1
             for stone in removed_stones:
                 input_board[0,0][stone] = 0

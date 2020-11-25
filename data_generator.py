@@ -3,23 +3,23 @@ import game_simulator
 import agents
 import random
 import game_displayer
+import parameters
 
 
 class DataGenerator():
-    def __init__(self, network, rollouts, replaybuffer, device):
+    def __init__(self, network, rollouts, replaybuffer, device, displayer):
         self.network = network
         self.rollouts = rollouts
         self.replaybuffer = replaybuffer
         self.device = device
-        display = True
-        self.displayer = None if display == False else game_displayer.GameWindow(1030, 830, 810, 9)
+        self.displayer = displayer
 
     def generate_games(self, number_of_games):
         for i in range(number_of_games):
             print("generating game")
-            gamesim = game_simulator.GameSim(1, 9, self.displayer, self.device)
-            agent = agents.NNAgent(self.network, self.rollouts, gamesim, self.device)
-            visit_proportions = torch.zeros(1,82).to(self.device)
+            gamesim = game_simulator.GameSim(1, parameters.dimension, self.displayer, self.device)
+            agent = agents.NNAgent(self.network, self.rollouts, gamesim, self.device, self.displayer if parameters.mcts_display else None)
+            visit_proportions = torch.zeros(1, parameters.dimension ** 2 + 1).to(self.device)
 
             while gamesim.winner == None:
                 next_move = agent.get_action()
@@ -27,7 +27,8 @@ class DataGenerator():
                 #step and inform agent of the result
                 if gamesim.step(next_move):
                     agent.update_root_node(next_move, gamesim)
-                    self.displayer.redrawgamewindow(gamesim.current_player, gamesim.boardstate)
+                    if self.displayer != None:
+                        self.displayer.redrawgamewindow(gamesim.current_player, gamesim.boardstate)
 
             input_history = gamesim.input_history
             policies = visit_proportions
@@ -61,14 +62,14 @@ class ReplayBuffer():
         sampled_games = random.sample(range(len(self.games)), batch_size)
         for game in sampled_games:
             position_number = random.randrange(len(self.games[game][1]))
-            input_slice = self.games[game][0][position_number:position_number + 8].view(16,9,9)
-            player_indicator = torch.zeros(2,9,9).to(self.device)
+            input_slice = self.games[game][0][position_number:position_number + 8].view(16,parameters.dimension,parameters.dimension)
+            player_indicator = torch.zeros(2,parameters.dimension,parameters.dimension).to(self.device)
             if position_number % 2 == 0:
                 player_indicator[0,0] += 1
             else:
                 player_indicator[0,1] += 1
 
-            single_position_input = torch.cat((player_indicator, input_slice)).view(1,18,9,9)
+            single_position_input = torch.cat((player_indicator, input_slice)).view(1,18,parameters.dimension,parameters.dimension)
             input = torch.cat((input, single_position_input))
 
             policy_slice = self.games[game][1][position_number]

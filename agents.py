@@ -4,6 +4,7 @@ import torch
 import copy
 import game_simulator
 import time
+import parameters
 
 
 class HumanAgent():
@@ -50,16 +51,16 @@ class RandomAgent():
         self.white_intersections = white_intersections
 
     def get_intersection(self, gamesim, displayer, illegal_moves):
-        if random.random() < 1 / 81:
-            return (9,0)
-        return (random.randint(0,8), random.randint(0,8))
+        if random.random() < 1 / (parameters.dimension ** 2 - 1):
+            return (parameters.dimension,0)
+        return (random.randint(0,parameters.dimension - 1), random.randint(0,parameters.dimension - 1))
 
 class SoftmaxAgent():
     def __init__(self):
         pass
 
     def ponder(self, gamesim, displayer):
-        move_signals = torch.randn(9,9)
+        move_signals = torch.randn(parameters.dimension,parameters.dimension)
         pass_signal = torch.randn(1)
         a = move_signals.view(-1)
         b = torch.cat((a, pass_signal))
@@ -68,18 +69,17 @@ class SoftmaxAgent():
 
     def get_intersection(self, gamesim, displayer, illegal_moves):
         sample = self.prob_dist.sample()
-        x = (sample // 9).item()
-        y = (sample % 9).item()
+        x = (sample // parameters.dimension).item()
+        y = (sample % parameters.dimension).item()
         return (x,y)
 
 
 class NNAgent():
-    def __init__(self, network, rollouts, gamesim, device):
+    def __init__(self, network, rollouts, gamesim, device, display = None):
         self.device = device
         self.network = network
         self.c_puct = 1.5
-        #self.mcts_gamesim = game_simulator.GameSim(0,9)
-        self.dirichlet_noise = torch.distributions.dirichlet.Dirichlet(torch.zeros(82)+.13)
+        self.dirichlet_noise = torch.distributions.dirichlet.Dirichlet(torch.zeros(parameters.dimension ** 2 + 1)+.13)
         self.rollouts = rollouts
         self.gamesim = gamesim
         policy, value = self.get_network_output(gamesim.current_player, gamesim.input_history)
@@ -87,8 +87,8 @@ class NNAgent():
         self.mcts_gamesim = game_simulator.GameSim(1, gamesim.dimension, gamesim.displayer, self.device) # to remove later
         self.root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample().to(self.device), self.device)
         #self.root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample())
-
         self.prob_dist = torch.distributions.Categorical(probs)
+        self.display = display
 
     class Node():
         def __init__(self, reset_data, probs, device):
@@ -96,9 +96,9 @@ class NNAgent():
             self.c_puct = 1.5
             self.reset_data = reset_data
             self.probs = probs
-            self.visit_counts = torch.zeros(82).to(self.device)
-            self.total_action_values = torch.zeros(82).to(self.device)
-            self.mean_action_values = torch.zeros(82).to(self.device)
+            self.visit_counts = torch.zeros(parameters.dimension ** 2 + 1).to(self.device)
+            self.total_action_values = torch.zeros(parameters.dimension ** 2 + 1).to(self.device)
+            self.mean_action_values = torch.zeros(parameters.dimension ** 2 + 1).to(self.device)
             self.u_values = self.c_puct * self.probs
             self.expanded_edges = {}
 
@@ -117,19 +117,19 @@ class NNAgent():
         return self.get_intersection()
 
     def get_network_output(self, current_player, input_history):
-        player_indicator = torch.zeros(1,2,9,9).to(self.device)
+        player_indicator = torch.zeros(1,2,parameters.dimension,parameters.dimension).to(self.device)
         if current_player == "black":
             player_indicator[0,0] += 1
         else:
             player_indicator[0,1] += 1
         input = input_history[-8:]
-        input = torch.cat((player_indicator, input)).view(1,18,9,9)
+        input = torch.cat((player_indicator, input)).view(1,18,parameters.dimension,parameters.dimension)
         self.network.to(self.device)
         policy, value = self.network(input.to(self.device))
         mask = torch.cat(((input_history[-1][0] + input_history[-1][1]).view(-1),torch.tensor([0.]).to(self.device))).type(torch.bool)
         #print(torch.sum(gamesim.input_history[-1][0]) + torch.sum(gamesim.input_history[-1][1]))
         #print("hi 1")
-        policy = policy.view(82)
+        policy = policy.view(parameters.dimension ** 2 + 1)
         policy[mask] = float('-inf')
         return policy, value
 
@@ -158,7 +158,7 @@ class NNAgent():
                 soft_upper_bound = current_node.mean_action_values + current_node.u_values
 
                 max_soft_upper_bound = soft_upper_bound.max().item()
-                max_soft_upper_bound_indices = (soft_upper_bound == max_soft_upper_bound).nonzero().view(-1)
+                max_soft_upper_bound_indices = torch.nonzero((soft_upper_bound == max_soft_upper_bound)).view(-1)
                 chosen_move = max_soft_upper_bound_indices[torch.randint(len(max_soft_upper_bound_indices),(1,))].item()
 
                 #chosen_move = torch.max(soft_upper_bound, 0)[1].item()
@@ -184,7 +184,8 @@ class NNAgent():
                         # go to that node
                         depth +=1
                         current_node = current_node.expanded_edges[chosen_move]
-                #displayer.redrawgamewindow(current_node.reset_data[0], current_node.reset_data[1], current_node.reset_data[2])
+                if self.display != None:
+                    self.display.redrawgamewindow(current_node.reset_data[0], current_node.reset_data[7])
             self.mcts_gamesim.set(self.root.reset_data)
         #print("root visit counts")
         #print(self.root.visit_counts)
@@ -233,8 +234,8 @@ class NNAgent():
             node.u_values = self.c_puct * node.probs * torch.sqrt(1 + torch.sum(node.visit_counts)) / (1 + node.visit_counts)
 
     def intersection_from_move_number(self, number):
-        x = (number // 9)
-        y = (number % 9)
+        x = (number // parameters.dimension)
+        y = (number % parameters.dimension)
         return (x,y)
 
     def get_intersection(self, MCTS = True):
@@ -245,7 +246,7 @@ class NNAgent():
 
             else:
                 max_visit_count = self.root.visit_counts.max().item()
-                max_indices = (self.root.visit_counts == max_visit_count).nonzero().view(-1)
+                max_indices = torch.nonzero((self.root.visit_counts == max_visit_count)).view(-1)
                 move_output = max_indices[torch.randint(len(max_indices),(1,))].item()
         else:
             move_output = self.prob_dist.sample().item()

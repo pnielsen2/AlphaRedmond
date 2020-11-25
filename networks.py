@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import parameters
 
 class Network(nn.Module):
     def __init__(self):
         super(Network, self).__init__()
-        self.blocks = 9
+        self.blocks = parameters.num_residual_blocks
         self.conv_block_conv = nn.Conv2d(18, 64, 3, padding = 1)
         self.conv_block_batch_norm = nn.BatchNorm2d(64)
 
