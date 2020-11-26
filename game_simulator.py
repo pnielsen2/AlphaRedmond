@@ -69,7 +69,6 @@ class GameSim():
         #print("mcts gamesim set")
 
     def record(self):
-        #return (copy.deepcopy(self.current_player), copy.deepcopy(self.groups), copy.deepcopy(self.board_history), self.input_history.clone(), copy.deepcopy(self.just_passed), copy.deepcopy(self.winner), copy.deepcopy(self.moves_played), copy.deepcopy(self.boardstate))
         return self.state_copy((self.current_player, self.groups, self.board_history, self.input_history, self.just_passed, self.winner, self.moves_played, self.boardstate))
 
     def switch_current_player(self):
@@ -165,11 +164,9 @@ class GameSim():
                 if len(group.liberties) == 0:
                     capture = True
                     captured_opponent_groups.add(group)
-                    #self.groups[self.opposite_player(self.current_player)].remove(group)
                     for stone in group.stones:
                         removed_stones.append(stone)
                         self.boardstate[self.player_id(self.opposite_player(self.current_player))].remove(stone)
-                        #self.filled_intersections.remove(stone)
                         for group in self.groups[self.current_player]:
                             if any([self.adjacent(stone,current_player_stone) for current_player_stone in group.stones]):
                                 group.liberties.add(stone)
@@ -233,7 +230,6 @@ class GameSim():
 
             return True
         else:
-            #print("hi")
             #print(next_move)
             #print(next_move in filled_intersections)
             #print(self.on_board(next_move))
@@ -244,7 +240,6 @@ class GameSim():
         white_score = len(self.boardstate[1]) + 7.5
         territory = [(x,y) for x in range(self.dimension) for y in range(self.dimension)]
         intersections = self.boardstate[0].union(self.boardstate[1])
-        #intersections.sort()
         #print(intersections)
         for intersection in intersections:
             territory.remove(intersection)
@@ -308,7 +303,7 @@ class GameSim():
         return liberties
 
     def clear(self, filled_intersections, color):
-        # black and white is a pair containing a list of
+        # black and white is a pair containing a list of black intersections, then white
         intersections = (filled_intersections[0] + filled_intersections[1])[:]
         if len(intersections) != len(set(intersections)):
             intersections.sort()
@@ -326,7 +321,6 @@ class GameSim():
         # for the opponent's stones. They shouldn't have changed from the last
         # board state if they haven't played a move since they were last calculated.
         groups = [[intersection for intersection in group] for group in self.groups[color]]
-        #groups = copy.deepcopy(self.groups[color])
         if color != self.current_player:
             clearedcolor = []
             candidate_groups = []
@@ -365,9 +359,6 @@ class GameSim():
                     print("inside clear 1")
                     print(intersections)
                 return black_and_white[:]
-        #else:
-            #exception
-
 
     def run(self, agents):
         while self.winner == None:
@@ -402,18 +393,5 @@ class GameSim():
             agent.update_root_node(self.most_recent_move)
         agent.ponder()
 
-        #self.visit_count_list = torch.cat((self.visit_count_list, agent.visit_counts.view(1,-1)))
         self.most_recent_move = agent.get_intersection()
         return self.most_recent_move
-        '''
-        while True:
-            intersection = agent.get_intersection(self, displayer)
-            if intersection != None:
-                legal = self.step(intersection)
-                if legal:
-                    break
-                else:
-            else:
-                break
-        return intersection
-        '''

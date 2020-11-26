@@ -23,7 +23,7 @@ import multiprocessing as mp
 import parameters
 
 
-
+print("Number of processors: ", mp.cpu_count())
 # nontrivial initializations (will change in distant future
 displayer = None if parameters.display == False else game_displayer.GameWindow(parameters.windowwidth, parameters.windowheight, parameters.boardsize, parameters.dimension)
 

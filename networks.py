@@ -10,21 +10,27 @@ class Network(nn.Module):
         self.conv_block_conv = nn.Conv2d(18, 64, 3, padding = 1)
         self.conv_block_batch_norm = nn.BatchNorm2d(64)
 
+        # for residual blocks
         self.resid_block_conv_1s = nn.ModuleList([nn.Conv2d(64, 64, 3, padding = 1) for i in range(self.blocks)])
         self.resid_block_batch_norm_1s = nn.ModuleList([nn.BatchNorm2d(64) for i in range(self.blocks)])
 
         self.resid_block_conv_2s = nn.ModuleList([nn.Conv2d(64, 64, 3, padding = 1) for i in range(self.blocks)])
         self.resid_block_batch_norm_2s = nn.ModuleList([nn.BatchNorm2d(64) for i in range(self.blocks)])
 
+        # for policy head
         self.policy_conv = nn.Conv2d(64, 2, 1)
         self.policy_batch_norm = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(162, 82)
 
+        # for value head
         self.value_conv = nn.Conv2d(64, 1, 1)
         self.value_batch_norm = nn.BatchNorm2d(1)
         self.value_fc1 = nn.Linear(81, 64)
         self.value_fc2 = nn.Linear(64, 1)
 
+        # initialize weights in last layer to be 0 - cool idea I thought of.
+        # it makes the policy uniform and the value 0. We're allowed to do this
+        # since it's just the last layer. Haven't ever heard this idea before
         torch.nn.init.constant_(self.policy_fc.weight,0)
         self.policy_fc.bias.data.fill_(0)
 
@@ -50,7 +56,7 @@ class Network(nn.Module):
         return policy, value
 
 
-
+# just a random network for testing
 class FastNetwork(nn.Module):
     def __init__(self):
         super(FastNetwork, self).__init__()

@@ -86,7 +86,6 @@ class NNAgent():
         probs = torch.nn.functional.softmax(policy, 0)
         self.mcts_gamesim = game_simulator.GameSim(1, gamesim.dimension, gamesim.displayer, self.device) # to remove later
         self.root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample().to(self.device), self.device)
-        #self.root = self.Node(self.mcts_gamesim.record(), (1 - .25) * probs + .25 * self.dirichlet_noise.sample())
         self.prob_dist = torch.distributions.Categorical(probs)
         self.display = display
 
@@ -151,9 +150,9 @@ class NNAgent():
             depth = 0
             current_node = self.root
             node_move_pairs = set([])
-            #time.sleep(1)
-            #print("new rollout")
+            # do a single rollout
             while True:
+
                 # choose the edge with the highest soft upper bound
                 soft_upper_bound = current_node.mean_action_values + current_node.u_values
 
@@ -161,31 +160,44 @@ class NNAgent():
                 max_soft_upper_bound_indices = torch.nonzero((soft_upper_bound == max_soft_upper_bound)).view(-1)
                 chosen_move = max_soft_upper_bound_indices[torch.randint(len(max_soft_upper_bound_indices),(1,))].item()
 
-                #chosen_move = torch.max(soft_upper_bound, 0)[1].item()
+                # if it's not in the tree, potentially add it to the tree
                 if chosen_move not in current_node.expanded_edges:
                     # leaf
                     # expand node
                     self.mcts_gamesim.set(current_node.reset_data)
+                    # check if the move is legal and get resulting board state
                     if self.mcts_gamesim.step(self.intersection_from_move_number(chosen_move)):
+                        # if legal, add it to the tree
                         self.update_search_tree(current_node, chosen_move, node_move_pairs, self.mcts_gamesim.current_player, self.mcts_gamesim.input_history, self.mcts_gamesim.winner)
+                        current_node = current_node.expanded_edges[chosen_move]
+                        if self.display != None:
+                            self.display.redrawgamewindow(current_node.reset_data[0], current_node.reset_data[7])
                         break
                     else:
+                        # if illegal, don't add to tree and make the reward -inf
+                        # so it never chooses it again
                         current_node.mean_action_values[chosen_move] = float('-inf')
                         current_node.total_action_values[chosen_move] = float('-inf')
+                # if the chosen move is in the tree,
                 else:
+                    # move the current rollout node to the resulting position
                     node_move_pairs.add((current_node, chosen_move))
-                    #check if terminal state
+                    # check if terminal state
                     if current_node.expanded_edges[chosen_move].reset_data[5] != None:
+                        # if game over, get the winner and "backprop" the reward
                         reward = (1 - 2 * self.gamesim.player_id(current_node.expanded_edges[chosen_move].reset_data[5])) * (1 - 2 * self.gamesim.player_id(current_node.reset_data[0]))
                         node_move_pairs.add((current_node, chosen_move))
                         self.backup(node_move_pairs, reward, self.mcts_gamesim.current_player)
+                        current_node = current_node.expanded_edges[chosen_move]
+                        if self.display != None:
+                            self.display.redrawgamewindow(current_node.reset_data[0], current_node.reset_data[7])
                         break
+                    # if game not over,
                     else:
                         # go to that node
                         depth +=1
                         current_node = current_node.expanded_edges[chosen_move]
-                if self.display != None:
-                    self.display.redrawgamewindow(current_node.reset_data[0], current_node.reset_data[7])
+
             self.mcts_gamesim.set(self.root.reset_data)
         #print("root visit counts")
         #print(self.root.visit_counts)
@@ -225,10 +237,8 @@ class NNAgent():
             #print(node.reset_data[0])
             #print("reward")
             #print(reward * (1 - 2 * self.gamesim.player_id(node.reset_data[0])) * (1 - 2 * self.gamesim.player_id(self.gamesim.opposite_player(current_player))))
-            # node reset data[0] is the current player in that node. This is
-            # positive if the node's current player is the same as the player
-            # who recieved the value.
 
+            # node.reset data[0] is the current player in that node.
             node.total_action_values[move] += value * (1 - 2 * self.gamesim.player_id(node.reset_data[0])) * (1 - 2 * self.gamesim.player_id(current_player))
             node.mean_action_values[move] = node.total_action_values[move] / node.visit_counts[move]
             node.u_values = self.c_puct * node.probs * torch.sqrt(1 + torch.sum(node.visit_counts)) / (1 + node.visit_counts)
@@ -239,6 +249,7 @@ class NNAgent():
         return (x,y)
 
     def get_intersection(self, MCTS = True):
+        #either choose randomly or deterministically depending on settings
         if MCTS:
             if self.root.moves_played < 8:
                 visit_dist = torch.distributions.Categorical(self.root.visit_counts)

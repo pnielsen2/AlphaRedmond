@@ -38,8 +38,8 @@ class GameWindow():
         else:
             return False
 
-    def redrawgamewindow(self, toplay, boardstate):
-
+    def redrawgamewindow(self, toplay, boardstate, root_visit_counts = None):
+        pygame.event.pump()
         # draw background
         self.win.fill((165,174,144))
 
@@ -109,3 +109,10 @@ class GameWindow():
         for intersection in boardstate[1]:
             drawstone(self.get_location(intersection), (255,255,255))
         pygame.display.update()
+
+        if root_visit_counts != None:
+            for row in range(9):
+                for column in range(9):
+                    a = root_visit_counts[row,column]
+                    if a != 0:
+                        drawstone(self.get_location((row,column)), (a, 0, 0))
